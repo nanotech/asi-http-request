@@ -8,6 +8,7 @@
 
 #import "ASIAuthenticationDialog.h"
 #import "ASIHTTPRequest.h"
+#import <QuartzCore/QuartzCore.h>
 
 ASIAuthenticationDialog *sharedDialog = nil;
 NSLock *dialogLock = nil;
@@ -25,12 +26,7 @@ static const NSUInteger kDomainSection = 1;
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
 {
-#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
-	if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-		return YES;
-	}
-#endif
-	return (toInterfaceOrientation == UIInterfaceOrientationPortrait);
+	return YES;
 }
 
 @end
@@ -83,6 +79,17 @@ static const NSUInteger kDomainSection = 1;
 		 selector:@selector(keyboardWillShow:)
 		 name:UIKeyboardWillShowNotification
 		 object:nil];
+#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
+		if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
+#endif
+			[[NSNotificationCenter defaultCenter]
+			 addObserver:self
+			 selector:@selector(orientationDidChange:)
+			 name:UIDeviceOrientationDidChangeNotification
+			 object:nil];
+#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
+		}
+#endif
 	}
 	return self;
 }
@@ -91,6 +98,14 @@ static const NSUInteger kDomainSection = 1;
 {
 	[[NSNotificationCenter defaultCenter]
 	 removeObserver:self name:UIKeyboardWillShowNotification object:nil];
+#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
+	if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
+#endif
+		[[NSNotificationCenter defaultCenter]
+		 removeObserver:self name:UIDeviceOrientationDidChangeNotification object:nil];
+#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
+	}
+#endif
 
 	[request release];
 	[tableView release];
@@ -112,6 +127,49 @@ static const NSUInteger kDomainSection = 1;
 		UIEdgeInsets e = UIEdgeInsetsMake(0, 0, keyboardBounds.size.height, 0);
 		[[self tableView] setScrollIndicatorInsets:e];
 		[[self tableView] setContentInset:e];
+#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
+	}
+#endif
+}
+
+- (void)orientationDidChange:(NSNotification *)notification
+{
+#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
+	if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
+#endif
+		UIDeviceOrientation o = [UIDevice currentDevice].orientation;
+		CGFloat angle = 0;
+		switch (o) {
+			case UIDeviceOrientationLandscapeLeft: angle = 90; break;
+			case UIDeviceOrientationLandscapeRight: angle = -90; break;
+			case UIDeviceOrientationPortraitUpsideDown: angle = 180; break;
+			default: break;
+		}
+		CGRect f = [UIScreen mainScreen].applicationFrame;
+		// Swap the frame height and width if necessary.
+		if (UIDeviceOrientationIsLandscape(o)) {
+			CGFloat t;
+			t = f.size.width;
+			f.size.width = f.size.height;
+			f.size.height = t;
+		}
+		CGAffineTransform previousTransform = self.view.layer.affineTransform;
+		CGAffineTransform newTransform = CGAffineTransformMakeRotation(angle * M_PI / 180.0);
+
+		// Reset the transform so we can set the size.
+		self.view.layer.affineTransform = CGAffineTransformIdentity;
+		self.view.frame = (CGRect){0,0,f.size};
+
+		// Revert to the previous transform for correct animation.
+		self.view.layer.affineTransform = previousTransform;
+
+		[UIView beginAnimations:nil context:NULL];
+		[UIView setAnimationDuration:0.3];
+		// Set the new transform.
+		self.view.layer.affineTransform = newTransform;
+		// Fix the view origin.
+		self.view.frame = (CGRect){f.origin.x,f.origin.y,self.view.frame.size};
+		[UIView commitAnimations];
 #if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
 	}
 #endif
@@ -158,10 +216,25 @@ static const NSUInteger kDomainSection = 1;
 
 #pragma mark show / dismiss
 
++ (void)reorientate
+{
+#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
+	if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
+#endif
+		// On dismissal, the status bar gets set to the orientation it was
+		// before our dialog was presented, but the view beneath us might
+		// have rotated to a different orientation in the meantime.
+		[UIApplication sharedApplication].statusBarOrientation = [UIDevice currentDevice].orientation;
+#if __IPHONE_3_2 && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_3_2
+	}
+#endif
+}
+
 + (void)dismiss
 {
 	[dialogLock lock];
 	[[sharedDialog parentViewController] dismissModalViewControllerAnimated:YES];
+	[[self class] reorientate];
 	[sharedDialog release];
 	sharedDialog = nil;
 	[dialogLock unlock];
@@ -173,6 +246,7 @@ static const NSUInteger kDomainSection = 1;
 		[[self class] dismiss];
 	} else {
 		[[self parentViewController] dismissModalViewControllerAnimated:YES];
+		[[self class] reorientate];
 	}
 }
 
@@ -192,13 +266,6 @@ static const NSUInteger kDomainSection = 1;
 	bar.items = [NSArray arrayWithObject:navItem];
 
 	[[self view] addSubview:bar];
-
-	// Setup the title
-	if ([self type] == ASIProxyAuthenticationType) {
-		[navItem setPrompt:@"Login to this secure proxy server."];
-	} else {
-		[navItem setPrompt:@"Login to this secure server."];
-	}
 
 	// Setup toolbar buttons
 	if ([self type] == ASIProxyAuthenticationType) {
