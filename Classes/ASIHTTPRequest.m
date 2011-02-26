@@ -4143,8 +4143,8 @@ static NSOperationQueue *sharedQueue = nil;
 	OSVersion = [NSString stringWithFormat:@"%u.%u.%u", versionMajor, versionMinor, versionBugFix];
 	
 #endif
-	// Takes the form "My Application 1.0 (Macintosh; Mac OS X 10.5.7; en_GB)"
-	return [NSString stringWithFormat:@"%@ %@ (%@; %@ %@; %@)", appName, appVersion, deviceName, OSName, OSVersion, locale];
+	// Takes the form "My Application/1.0 (Macintosh; Mac OS X 10.5.7; en-gb)"
+	return [NSString stringWithFormat:@"%@/%@ (%@; %@ %@; %@)", appName, appVersion, deviceName, OSName, OSVersion, locale];
 }
 
 #pragma mark mime-type detection
