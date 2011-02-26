@@ -11,6 +11,7 @@
 #import "ASINetworkQueue.h"
 #import "ASIFormDataRequest.h"
 #import <SystemConfiguration/SystemConfiguration.h>
+#import <unistd.h>
 
 // Used for subclass test
 @interface ASIHTTPRequestSubclass : ASIHTTPRequest {}
@@ -22,6 +23,33 @@
 {
 	[[NSException exceptionWithName:@"Test Exception" reason:@"Test Reason" userInfo:nil] raise];
 }
+@end
+
+
+// Stop clang complaining about undeclared selectors
+@interface ASIHTTPRequestTests ()
+- (void)runCancelTest;
+- (void)performDelegateMethodsTest;
+- (void)requestStarted:(ASIHTTPRequest *)request;
+- (void)requestFinished:(ASIHTTPRequest *)request;
+- (void)requestFailed:(ASIHTTPRequest *)request;
+- (void)delegateTestStarted:(ASIHTTPRequest *)request;
+- (void)delegateTestResponseHeaders:(ASIHTTPRequest *)request;
+- (void)delegateTestFinished:(ASIHTTPRequest *)request;
+- (void)delegateTestFailed:(ASIHTTPRequest *)request;
+- (void)runRemoveUploadProgressTest;
+- (void)runRedirectedResume;
+- (void)performDownloadProgressTest;
+- (void)theTestRequest:(ASIHTTPRequest *)request didReceiveData:(NSData *)data;
+- (void)theTestRequestFinished:(ASIHTTPRequest *)request;
+- (void)performUploadProgressTest;
+- (void)performPostBodyStreamedFromDiskTest;
+- (void)performPartialFetchTest;
+- (void)asyncFail:(ASIHTTPRequest *)request;
+- (void)asyncSuccess:(ASIHTTPRequest *)request;
+- (void)request:(ASIHTTPRequest *)request isGoingToRedirectToURL:(NSURL *)url;
+- (void)redirectURLTestFailed:(ASIHTTPRequest *)request;
+- (void)redirectURLTestSucceeded:(ASIHTTPRequest *)request;
 @end
 
 @implementation ASIHTTPRequestTests
@@ -118,15 +146,13 @@
 	ASIHTTPRequest *request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com"]];
 	[request setDelegate:self];
 	[request startSynchronous];
-	
-	// Hacky, but this test won't run on the main thread, we have to hope the delegate methods will be called in this time
-	[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+
 	
 	GHAssertTrue(started,@"Failed to call the delegate method when the request started");	
 	GHAssertTrue(receivedResponseHeaders,@"Failed to call the delegate method when the request started");	
 	GHAssertTrue(finished,@"Failed to call the delegate method when the request finished");
 	
-	request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/the_great_american_novel_%28abridged%29.txt"]];
+	request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/the_great_american_novel.txt"]];
 	[request setDelegate:self];
 	[request setTimeOutSeconds:0.01];
 	[request startSynchronous];
@@ -150,7 +176,7 @@
 	GHAssertTrue(started,@"Failed to call the delegate method when the request started");	
 	GHAssertTrue(finished,@"Failed to call the delegate method when the request finished");
 	
-	request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/the_great_american_novel_%28abridged%29.txt"]];
+	request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/the_great_american_novel.txt"]];
 	[request setDidFailSelector:@selector(delegateTestFailed:)];
 	[request setDelegate:self];
 	[request setTimeOutSeconds:0.01];
@@ -165,9 +191,9 @@
 	started = YES;
 }
 
-- (void)requestReceivedResponseHeaders:(ASIHTTPRequest *)request
+- (void)request:(ASIHTTPRequest *)request didReceiveResponseHeaders:(NSDictionary *)newResponseHeaders
 {
-	GHAssertNotNil([request responseHeaders],@"Called requestReceivedResponseHeaders: when we have no headers");
+	GHAssertNotNil(newResponseHeaders,@"Called request:didReceiveResponseHeaders: when we have no headers");
 	receivedResponseHeaders = YES;
 }
 
@@ -636,21 +662,100 @@
 - (void)testCompressedResponseDownloadToFile
 {
 	NSString *path = [[self filePathForTemporaryTestFiles] stringByAppendingPathComponent:@"testfile"];
-	
+
 	NSURL *url = [[[NSURL alloc] initWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/first"] autorelease];
 	ASIHTTPRequest *request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
 	[request setDownloadDestinationPath:path];
 	[request startSynchronous];
-	
+
 	NSString *tempPath = [request temporaryFileDownloadPath];
 	GHAssertNil(tempPath,@"Failed to clean up temporary download file");		
-	
-	//BOOL success = (![[NSFileManager defaultManager] fileExistsAtPath:tempPath]);
-	//GHAssertTrue(success,@"Failed to remove file from temporary location");	
-	
-	BOOL success = [[NSString stringWithContentsOfURL:[NSURL fileURLWithPath:path] encoding:NSUTF8StringEncoding error:NULL] isEqualToString:@"This is the expected content for the first string"];
+
+	BOOL success = [[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL] isEqualToString:@"This is the expected content for the first string"];
 	GHAssertTrue(success,@"Failed to download data to a file");
-	
+
+	// Now test with inflating the response on the fly
+	NSError *error = nil;
+	[ASIHTTPRequest removeFileAtPath:path error:&error];
+	if (error) {
+		GHFail(@"Failed to remove file, cannot proceed with test");
+	}
+
+	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
+	[request setDownloadDestinationPath:path];
+	[request setShouldWaitToInflateCompressedResponses:NO];
+	[request startSynchronous];
+
+	tempPath = [request temporaryFileDownloadPath];
+	GHAssertNil(tempPath,@"Failed to clean up temporary download file");
+
+	success = [[NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL] isEqualToString:@"This is the expected content for the first string"];
+	GHAssertTrue(success,@"Failed to download data to a file");
+}
+
+- (void)request:(ASIHTTPRequest *)request didGetMoreData:(NSData *)data
+{
+	[[self responseData] appendData:data];
+}
+
+- (void)downloadFinished:(ASIHTTPRequest *)request
+{
+	finished = YES;
+}
+
+- (void)testCompressedResponseDelegateDataHandling
+{
+	finished = NO;
+	[self setResponseData:[NSMutableData data]];
+
+	NSURL *url = [[[NSURL alloc] initWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/the_hound_of_the_baskervilles.text"] autorelease];
+
+	ASIHTTPRequest *request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
+	[request startSynchronous];
+
+	NSString *response = [request responseString];
+
+	// Now download again, using the delegate to handle the data
+	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
+	[request setDelegate:self];
+	[request setDidReceiveDataSelector:@selector(request:didGetMoreData:)];
+	[request setDidFinishSelector:@selector(downloadFinished:)];
+	[request setShouldWaitToInflateCompressedResponses:NO];
+	[request startSynchronous];
+
+	while (!finished) {
+		sleep(1);
+	}
+
+	NSString *delegateResponse = [[[NSString alloc] initWithBytes:[responseData bytes] length:[responseData length] encoding:[request responseEncoding]] autorelease];
+	BOOL success = [delegateResponse isEqualToString:response];
+	GHAssertTrue(success,@"Failed to correctly download the response using a delegate");
+
+	// Test again without compression
+	finished = NO;
+	[self setResponseData:[NSMutableData data]];
+
+	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
+	[request setAllowCompressedResponse:NO];
+	[request startSynchronous];
+
+	response = [request responseString];
+
+	// Now download again, using the delegate to handle the data
+	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
+	[request setDelegate:self];
+	[request setDidReceiveDataSelector:@selector(request:didGetMoreData:)];
+	[request setDidFinishSelector:@selector(downloadFinished:)];
+	[request setAllowCompressedResponse:NO];
+	[request startSynchronous];
+
+	while (!finished) {
+		sleep(1);
+	}
+
+	delegateResponse = [[[NSString alloc] initWithBytes:[responseData bytes] length:[responseData length] encoding:[request responseEncoding]] autorelease];
+	success = [delegateResponse isEqualToString:response];
+	GHAssertTrue(success,@"Failed to correctly download the response using a delegate");
 }
 
 
@@ -752,8 +857,6 @@
 	success = [[request responseString] isEqualToString:requestBody];
 	GHAssertTrue(success,@"Failed upload the correct request body");		
 }
-
-
 
 - (void)testCookies
 {
@@ -980,7 +1083,7 @@
 	[request setUseSessionPersistence:YES];
 	[request startSynchronous];
 	success = [request authenticationRetryCount] == 0;
-	GHAssertTrue(success,@"Didn't supply credentials before being asked for them when talking to the same server with shouldPresentCredentialsBeforeChallenge == YES");	
+	GHAssertTrue(success,@"Didn't supply credentials before being asked for them when talking to the same server with shouldPresentCredentialsBeforeChallenge == YES");
 	
 	// Ensure credentials stored in the session were not presented to the server before it asked for them
 	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
@@ -992,15 +1095,26 @@
 	
 	[ASIHTTPRequest clearSession];
 	
-	// Test credentials set on the request are sent before the server asks for them
+	// Test credentials set on the request are not sent before the server asks for them unless they are cached credentials from a previous request to this server
 	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
 	[request setUseSessionPersistence:NO];
 	[request setUsername:@"secret_username"];
 	[request setPassword:@"secret_password"];
 	[request setShouldPresentCredentialsBeforeChallenge:YES];
 	[request startSynchronous];
+	BOOL fail = [request authenticationRetryCount] == 0;
+	GHAssertFalse(fail,@"Sent Basic credentials even though request did not have kCFHTTPAuthenticationSchemeBasic set as authenticationScheme.");
+
+	// Test basic credentials set on the request are sent before the server asks for them if we've explictly set the authentication scheme to basic
+	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
+	[request setUseSessionPersistence:NO];
+	[request setUsername:@"secret_username"];
+	[request setPassword:@"secret_password"];
+	[request setShouldPresentCredentialsBeforeChallenge:YES];
+	[request setAuthenticationScheme:(NSString *)kCFHTTPAuthenticationSchemeBasic];
+	[request startSynchronous];
 	success = [request authenticationRetryCount] == 0;
-	GHAssertTrue(success,@"Didn't supply credentials before being asked for them, even though they were set on the request and shouldPresentCredentialsBeforeChallenge == YES");	
+	GHAssertTrue(success,@"Didn't supply credentials before being asked for them, even though they were set on the request and shouldPresentCredentialsBeforeChallenge == YES");
 	
 	// Test credentials set on the request aren't sent before the server asks for them
 	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
@@ -1171,18 +1285,25 @@
 	NSString *encoding = [[request responseHeaders] objectForKey:@"Content-Encoding"];
 	BOOL success = (!encoding || [encoding rangeOfString:@"gzip"].location != NSNotFound);
 	GHAssertTrue(success,@"Got incorrect request headers from server");
-	
+
 	success = ([request rawResponseData] == [request responseData]);
 	GHAssertTrue(success,@"Attempted to uncompress data that was not compressed");	
-	
+
 	url = [[[NSURL alloc] initWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/first"] autorelease];
 	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
 	[request startSynchronous];
 	success = ([request rawResponseData] != [request responseData]);
 	GHAssertTrue(success,@"Uncompressed data is the same as compressed data");	
-	
+
 	success = [[request responseString] isEqualToString:@"This is the expected content for the first string"];
 	GHAssertTrue(success,@"Failed to decompress data correctly?");
+
+	url = [[[NSURL alloc] initWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/first"] autorelease];
+	request = [[[ASIHTTPRequest alloc] initWithURL:url] autorelease];
+	[request setShouldWaitToInflateCompressedResponses:NO];
+	[request startSynchronous];
+	success = ([request rawResponseData] == [request responseData]);
+	GHAssertTrue(success,@"Failed to populate rawResponseData with the inflated data");
 }
 
 
@@ -1206,10 +1327,11 @@
 	[request setDownloadDestinationPath:downloadPath];
 	[request setTemporaryFileDownloadPath:tempPath];
 	[request setAllowResumeForFileDownloads:YES];
+	[request setAllowCompressedResponse:NO];
 	[request setDownloadProgressDelegate:self];
 	[request startSynchronous];
 	
-	BOOL success = ([request contentLength] == 68);
+	BOOL success = ([request contentLength] == 163-95);
 	GHAssertTrue(success,@"Failed to download a segment of the data");
 	
 	NSString *content = [NSString stringWithContentsOfFile:downloadPath encoding:NSUTF8StringEncoding error:NULL];
@@ -1284,54 +1406,26 @@
 	GHAssertTrue(success,@"Failed to use GET on new URL");
 }
 
-- (void)testCompression
+- (void)testCompressedBody
 {
+	
 	NSString *content = @"This is the test content. This is the test content. This is the test content. This is the test content.";
 	
 	// Test in memory compression / decompression
 	NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding];
-	NSData *compressedData = [ASIHTTPRequest compressData:data];
-	NSData *uncompressedData = [ASIHTTPRequest uncompressZippedData:compressedData];
-	NSString *newContent = [[[NSString alloc] initWithBytes:[uncompressedData bytes] length:[uncompressedData length] encoding:NSUTF8StringEncoding] autorelease];
+
 	
-	BOOL success = [newContent isEqualToString:content];
-	GHAssertTrue(success,@"Failed compress or decompress the correct data");	
-	
-	// Test file to file compression / decompression
-	
-	NSString *basePath = [self filePathForTemporaryTestFiles];
-	NSString *sourcePath = [basePath stringByAppendingPathComponent:@"text.txt"];
-	NSString *destPath = [basePath stringByAppendingPathComponent:@"text.txt.compressed"];
-	NSString *newPath = [basePath stringByAppendingPathComponent:@"text2.txt"];
-	
-	[content writeToFile:sourcePath atomically:NO encoding:NSUTF8StringEncoding error:NULL];
-	[ASIHTTPRequest compressDataFromFile:sourcePath toFile:destPath];
-	[ASIHTTPRequest uncompressZippedDataFromFile:destPath toFile:newPath];
-	success = [[NSString stringWithContentsOfFile:newPath encoding:NSUTF8StringEncoding error:NULL] isEqualToString:content];
-	GHAssertTrue(success,@"Failed compress or decompress the correct data");
-	
-	// Test compressed body
-	// Body is deflated by ASIHTTPRequest, sent, inflated by the server, printed, deflated by mod_deflate, response is inflated by ASIHTTPRequest
 	ASIHTTPRequest *request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/compressed_post_body"]];
-	[request setRequestMethod:@"PUT"];
-	[request setShouldCompressRequestBody:YES];
-	[request appendPostData:data];
-	[request startSynchronous];
-	
-	success = [[request responseString] isEqualToString:content];
-	GHAssertTrue(success,@"Failed to compress the body, or server failed to decompress it");	
-	
-	request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/compressed_post_body"]];
 	[request setRequestMethod:@"PUT"];
 	[request setShouldCompressRequestBody:YES];
 	[request setShouldStreamPostDataFromDisk:YES];
 	[request setUploadProgressDelegate:self];
-	[request setPostBodyFilePath:sourcePath];
+	[request appendPostData:data];
 	[request startSynchronous];
 
-	success = [[request responseString] isEqualToString:content];
-	GHAssertTrue(success,@"Failed to compress the body, or server failed to decompress it");		
-	
+	BOOL success = ([[request responseString] isEqualToString:content]);
+	GHAssertTrue(success,@"Failed to compress the body, or server failed to decompress it");
+
 }
 
 
@@ -1555,7 +1649,7 @@
 	GHAssertTrue(success,@"Should not be able to re-use a request sent with Connection:close");
 	
 	// Ensure we close the connection when authentication is needed
-	request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://asi/ASIHTTPRequest/tests/close-connection-auth-needed"]];
+	request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/close-connection-auth-needed"]];
 	[request startSynchronous];
 	
 	success = ![request connectionCanBeReused];
@@ -1578,7 +1672,7 @@
 	GHAssertTrue(success,@"Request failed to use time out set by server");
 	
 	// Wait 3 seconds - connection should have timed out
-	[[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:3]];
+	sleep(3);
 	
 	request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com"]];
 	[request startSynchronous];
@@ -1753,6 +1847,54 @@
 
 	BOOL success = [expectedOutput isEqualToString:[NSString stringWithContentsOfFile:completePath encoding:NSUTF8StringEncoding error:NULL]];
 	GHAssertTrue(success, @"Failed to send the correct Range headers to the server when resuming after a timeout");
+}
+
+- (void)testChangeURLOnAuthenticationRetry
+{
+	ASIHTTPRequest *request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/basic-authentication"]];
+	[request setDelegate:self];
+	[request setValidatesSecureCertificate:NO];
+	[request startAsynchronous];
+}
+
+- (void)changeURLFailed:(ASIHTTPRequest *)request
+{
+	GHFail(@"Request failed when changing url");
+}
+
+- (void)authenticationNeededForRequest:(ASIHTTPRequest *)request
+{
+	[request setUsername:@"foo"];
+	[request setPassword:@"foo"];
+	[request setDidFailSelector:@selector(changeURLFailed:)];
+	[request setURL:[NSURL URLWithString:@"http://allseeing-i.com"]];
+	[request retryUsingSuppliedCredentials];
+}
+
+- (void)testDelegateRedirectHandling
+{
+	ASIHTTPRequest *request = [ASIHTTPRequest requestWithURL:[NSURL URLWithString:@"http://allseeing-i.com/ASIHTTPRequest/tests/redirect_to_ssl"]];
+	[request setDelegate:self];
+	[request setWillRedirectSelector:@selector(request:isGoingToRedirectToURL:)];
+	[request setDidFailSelector:@selector(redirectURLTestFailed:)];
+	[request setDidFinishSelector:@selector(redirectURLTestSucceeded:)];
+	[request startAsynchronous];
+}
+
+- (void)redirectURLTestSucceeded:(ASIHTTPRequest *)request
+{
+	BOOL success = [[request url] isEqual:[NSURL URLWithString:@"http://allseeing-i.com"]];
+	GHAssertTrue(success,@"Request failed to redirect to url specified by delegate");
+}
+
+- (void)redirectURLTestFailed:(ASIHTTPRequest *)request
+{
+	GHFail(@"Request failed, cannot proceed with test");
+}
+
+- (void)request:(ASIHTTPRequest *)request isGoingToRedirectToURL:(NSURL *)url
+{
+	[request redirectToURL:[NSURL URLWithString:@"http://allseeing-i.com"]];
 }
 
 @synthesize responseData;
