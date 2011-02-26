@@ -4117,8 +4117,9 @@ static NSOperationQueue *sharedQueue = nil;
 	NSString *OSName;
 	NSString *OSVersion;
 	
-	NSString *locale = [[NSLocale currentLocale] localeIdentifier];
-	
+	NSString *locale = [[[[NSLocale currentLocale] localeIdentifier]
+						 stringByReplacingOccurrencesOfString:@"_" withString:@"-"]
+						lowercaseString];
 #if TARGET_OS_IPHONE
 	UIDevice *device = [UIDevice currentDevice];
 	deviceName = [device model];
